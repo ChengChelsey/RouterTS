@@ -1,8 +1,5 @@
 # RouterTS
 
-RouterTS routes each time series to the anomaly detector that performs best on
-its cluster.
-
 ## Get Started
 
 **Step 1:** Clone this repository and change into its root directory.
