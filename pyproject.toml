@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "routerts"
+version = "0.1.0"
+description = "RouterTS: from global ranking to local routing for time series anomaly detection."
+readme = "readme.md"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=1.5",
+    "scikit-learn>=1.2",
+    "scipy>=1.10",
+    "pycatch22>=0.4",
+    "tsb-ad>=1.5",
+]
+
+[project.optional-dependencies]
+provenance = ["shap>=0.42"]
+dev = ["pytest>=7"]
+
+[tool.setuptools.packages.find]
+include = ["routerts*"]

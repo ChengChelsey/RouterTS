@@ -1,5 +1,3 @@
-"""Ward hierarchical clustering with micro-cluster consolidation and per-cluster model training."""
-
 import re
 import os
 import pickle
@@ -87,7 +85,6 @@ def save_cluster_features(path: str, raw_catch22: np.ndarray, labels: np.ndarray
 
 
 def save_cluster_list(path: str, dataset_names: list, labels: np.ndarray) -> str:
-    # Save cluster-dataset mapping CSV
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     rows = [
         {'cluster': f'C{labels[i]}', 'dataset_name': name.replace('.csv', '') if name.endswith('.csv') else name}

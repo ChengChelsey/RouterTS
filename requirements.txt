@@ -1,6 +1,12 @@
+# RouterTS core
 numpy>=1.24
 pandas>=1.5
 scikit-learn>=1.2
 scipy>=1.10
 pycatch22>=0.4
+
+# Optional: decision provenance (--trace)
 shap>=0.42
+
+# Evaluation platform: 20 candidate detectors + VUS-PR / other metrics
+tsb-ad>=1.5

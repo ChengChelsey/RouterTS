@@ -21,6 +21,7 @@ from routerts.config import (
     DEFAULT_GAP_THRESHOLD,
     DEFAULT_WINDOW_SIZE,
     DEFAULT_EVAL_SLIDING_WINDOW,
+    DEFAULT_RRF_KAPPA,
 )
 from routerts.features.catch22 import split_ts, extract_catch22_features
 from routerts.selector.routing import predict_cluster
@@ -29,6 +30,7 @@ from routerts.selector.predictor import (
     gap_weighted_voting,
     load_anomaly_score,
 )
+from routerts.fusion.rrf import fusion_rrf_topk
 from routerts.provenance.explainer import ClusterDecisionTracer
 
 try:
@@ -56,6 +58,31 @@ def extract_features(data: np.ndarray, window_size: int) -> np.ndarray:
     return meta_features
 
 
+def fuse_top_b(filename, probs_dict, score_dir, label_len, B, k0):
+    # wRRF: fuse the anomaly scores of the top-B detectors (ranked by their gap-weighted vote probability) via weighted reciprocal-rank fusion.
+    ranked = sorted(
+        [(m, p) for m, p in probs_dict.items() if p > 0],
+        key=lambda x: -x[1],
+    )[:B]
+    score_name = filename.split('.')[0]
+    scores_list = []
+    n_fused = 0
+    for model, prob in ranked:
+        if not os.path.exists(os.path.join(score_dir, model, f'{score_name}.npy')):
+            continue  # skip missing detectors, as calc_cluster_rrf does
+        s = load_anomaly_score(filename, model, score_dir, label_len)
+        if s is not None and len(s) > 0:
+            scores_list.append((s, prob))
+            n_fused += 1
+    if not scores_list:
+        return np.zeros(label_len), 0
+    if len(scores_list) == 1:
+        # use its raw score
+        return scores_list[0][0], 1
+    fused = fusion_rrf_topk(scores_list, k0=k0)
+    return (fused if fused is not None else scores_list[0][0]), n_fused
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description='RouterTS Online Inference Pipeline',
@@ -77,6 +104,12 @@ def parse_args():
 
     parser.add_argument('--gap_threshold', type=float, default=DEFAULT_GAP_THRESHOLD)
     parser.add_argument('--window_size', type=int, default=DEFAULT_WINDOW_SIZE)
+    parser.add_argument(
+        '--B', type=int, default=1,
+        help='Number of top detectors to use. B=1 (default): the routed '
+             "detector's raw anomaly score. B>1: weighted reciprocal-rank "
+             'fusion (wRRF) of the top-B detectors.',
+    )
 
     parser.add_argument('--trace', action='store_true',
                         help='Enable decision provenance')
@@ -156,7 +189,7 @@ def main():
         logger.info('Decision tracer initialized')
 
     columns = [
-        'file', 'true_cluster', 'used_cluster', 'Time', 'flag',
+        'file', 'true_cluster', 'used_cluster', 'Time', 'flag', 'B',
     ]
     if _TSB_AD_AVAILABLE:
         columns += ['AUC-ROC', 'AUC-PR', 'VUS-ROC', 'VUS-PR',
@@ -211,9 +244,18 @@ def main():
             selected_model, probs_dict, _ = gap_weighted_voting(
                 preds, CANDIDATE_MODEL_SET_20, args.gap_threshold,
             )
-            score = load_anomaly_score(
-                filename, selected_model, args.score_dir, len(label),
-            )
+            if args.B <= 1:
+                # B=1: routed detector's raw anomaly score
+                score = load_anomaly_score(
+                    filename, selected_model, args.score_dir, len(label),
+                )
+                n_fused = 1
+            else:
+                # B>1: weighted reciprocal-rank fusion (wRRF) of top-B detectors
+                score, n_fused = fuse_top_b(
+                    filename, probs_dict, args.score_dir, len(label),
+                    args.B, DEFAULT_RRF_KAPPA,
+                )
             flag = True
 
         except Exception as e:
@@ -221,6 +263,7 @@ def main():
             score = np.zeros(len(label))
             flag = False
             probs_dict = {m: 0.0 for m in CANDIDATE_MODEL_SET_20}
+            n_fused = 0
 
         end_time = time.time()
         run_time = end_time - start_time
@@ -231,6 +274,7 @@ def main():
             'used_cluster': f'C{cluster_id}',
             'Time': round(run_time, 3),
             'flag': flag,
+            'B': n_fused,
         }
 
         if _TSB_AD_AVAILABLE and flag:
@@ -317,7 +361,7 @@ def main():
         df_results = pd.DataFrame(write_rows)
         valid = df_results[df_results['flag'] == True]
         if len(valid) > 0:
-            logger.info(f'=== {output_name} Summary ===')
+            logger.info(f'=== {output_name} Summary (B={args.B}) ===')
             logger.info(f'  Files: {len(valid)}/{len(write_rows)}')
             for metric in ['VUS-PR', 'VUS-ROC', 'AUC-PR', 'AUC-ROC']:
                 if metric in valid.columns:
@@ -325,7 +369,6 @@ def main():
 
 
 def _save_results(rows, columns, path):
-    # Save or overwrite results CSV
     if not rows:
         return
     df = pd.DataFrame(rows)

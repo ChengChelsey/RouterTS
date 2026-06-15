@@ -21,7 +21,6 @@ def align_score_to_label(score: np.ndarray, label_len: int) -> np.ndarray:
 
 
 def fusion_rrf_topk(scores_list: list, k0: int = 60) -> np.ndarray:
-    # wRRF: fuse multiple (score, weight) pairs via w/(k0+rank)
     if not scores_list:
         return None
 

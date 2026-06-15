@@ -1,7 +1,5 @@
-# Data and models
 *.pkl
 *.npy
-*.csv
 *.zst
 
 # Python
@@ -13,18 +11,21 @@ dist/
 build/
 .eggs/
 
-# IDE
+# IDE / OS / env
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# OS
 .DS_Store
 Thumbs.db
-
-# Env
 .env
 .venv/
 venv/
 
+# Generated run outputs
+out/
+reference/
+
+# Reviewer-supplied data
+datasets/
+scores/
