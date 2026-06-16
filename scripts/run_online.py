@@ -181,12 +181,19 @@ def main():
     if args.trace:
         trace_output_dir = output_dir / 'traces' / output_name
         trace_output_dir.mkdir(parents=True, exist_ok=True)
+        if args.domain == 'ID':
+            trace_variants = ['ID']
+        elif args.variant is not None:
+            trace_variants = [args.variant]
+        else:
+            trace_variants = sorted(set(file_domain_map.values())) if has_domain else ['ID']
         tracer = ClusterDecisionTracer(
             classifier_path=args.classifier_path,
             model_dir=args.model_dir,
             meta_feature_path=args.meta_csv,
+            variants=trace_variants,
         )
-        logger.info('Decision tracer initialized')
+        logger.info(f'Decision tracer initialized (variants={trace_variants})')
 
     columns = [
         'file', 'true_cluster', 'used_cluster', 'Time', 'flag', 'B',
@@ -324,6 +331,7 @@ def main():
                     window_scores_source_cluster_id=cluster_id,
                     score_source_policy='trust_input',
                     scores_dict=scores_dict if scores_dict else None,
+                    variant=variant,
                 )
 
                 trace_path = trace_output_dir / f'{filename.replace(".csv", "")}.trace.json'

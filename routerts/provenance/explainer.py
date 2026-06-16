@@ -30,13 +30,13 @@ class ClusterDecisionTracer:
         classifier_path: str,
         model_dir: str,
         meta_feature_path: str,
-        config: str = 'agg_raw_k13',
         domain: str = 'ID',
+        variants: Optional[List[str]] = None,
         background_sample_size: int = 200,
         random_state: int = 2024,
     ):
-        self.config = config
         self.domain = domain
+        self._variants = variants
         self.classifier_path = Path(classifier_path)
         self.model_dir = Path(model_dir)
         self.meta_feature_path = Path(meta_feature_path)
@@ -49,14 +49,13 @@ class ClusterDecisionTracer:
         self.centers = self._clf['centers']
         self.n_clusters = self._clf['n_clusters']
 
-        self._models: Dict[int, object] = {}
-        self._explainers: Dict[int, object] = {}
+        self._models: Dict[Tuple[int, str], object] = {}
+        self._explainers: Dict[Tuple[int, str], object] = {}
         self._background_data: Dict[int, np.ndarray] = {}
 
         self._load_training_data()
 
     def _load_training_data(self):
-        # Load training data, group by cluster, create TreeExplainer
         rng = np.random.RandomState(self.random_state)
         df = pd.read_csv(self.meta_feature_path, index_col=0)
         feature_cols = [f'val_{i}' for i in range(N_FEATURES)]
@@ -72,34 +71,49 @@ class ClusterDecisionTracer:
         window_clusters = dataset_names.map(ds_to_cluster)
 
         for cid in range(self.n_clusters):
-            model_path = self.model_dir / self.config / f'SATzilla_Cluster_C{cid}' / f'{self.domain}.pkl'
-            if not model_path.exists():
-                logger.warning(f"RF model not found: {model_path}")
+            cluster_dir = self.model_dir / f'SATzilla_Cluster_C{cid}'
+            if self._variants is not None:
+                model_paths = [cluster_dir / f'{v}.pkl' for v in self._variants]
+                model_paths = [p for p in model_paths if p.exists()]
+            else:
+                model_paths = sorted(cluster_dir.glob('*.pkl')) if cluster_dir.exists() else []
+            if not model_paths:
+                logger.warning(f"No RF models in cluster dir: {cluster_dir}")
                 continue
-            with open(model_path, 'rb') as f:
-                model = pickle.load(f)
-            self._models[cid] = model
 
             mask = window_clusters == cid
             X_cluster = X_all.loc[mask.values]
-
             if len(X_cluster) == 0:
                 logger.warning(f"Cluster {cid}: no training windows found")
                 continue
-
             n_bg = min(self.background_sample_size, len(X_cluster))
             idx = rng.choice(len(X_cluster), n_bg, replace=False)
             self._background_data[cid] = X_cluster.iloc[idx]
 
-            try:
-                self._explainers[cid] = shap.TreeExplainer(
-                    model, data=self._background_data[cid]
-                )
-            except Exception as e:
-                logger.warning(f"Failed to create TreeExplainer for cluster {cid}: {e}")
+            for model_path in model_paths:
+                variant = model_path.stem
+                with open(model_path, 'rb') as f:
+                    model = pickle.load(f)
+                self._models[(cid, variant)] = model
+                try:
+                    self._explainers[(cid, variant)] = shap.TreeExplainer(
+                        model, data=self._background_data[cid]
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to create TreeExplainer for cluster {cid}/{variant}: {e}")
 
         logger.info(f"Loaded {len(self._models)} cluster RFs, "
                      f"{len(self._explainers)} SHAP explainers")
+
+    def _model_key(self, cluster_id: int, variant: Optional[str]) -> Tuple[int, str]:
+        # resolve the (cluster, variant) model key
+        v = variant or self.domain
+        if (cluster_id, v) in self._models:
+            return (cluster_id, v)
+        for (cid, vv) in self._models:
+            if cid == cluster_id:
+                return (cid, vv)
+        return (cluster_id, v)
 
     def explain_routing(self, catch22_features: np.ndarray) -> RoutingCard:
         x = np.asarray(catch22_features).reshape(1, -1)
@@ -115,7 +129,6 @@ class ClusterDecisionTracer:
 
         margin = distances[second_id] - distances[nearest_id]
 
-        # Distance decomposition: Δ_j > 0 means feature j supports nearest cluster
         delta = diffs[second_id] ** 2 - diffs[nearest_id] ** 2
 
         x_mean = self.scaler.mean_
@@ -339,14 +352,16 @@ class ClusterDecisionTracer:
         cluster_id: int,
         detector_indices: List[int],
         representative_window_map: Optional[Dict[int, int]] = None,
+        variant: Optional[str] = None,
     ) -> Tuple[Dict[str, Dict], Optional[PairwiseTrace]]:
         # Run TreeSHAP on representative windows to explain RF scoring
-        if cluster_id not in self._explainers:
-            logger.warning(f"No SHAP explainer for cluster {cluster_id}")
+        key = self._model_key(cluster_id, variant)
+        if key not in self._explainers:
+            logger.warning(f"No SHAP explainer for {key}")
             return {}, None
 
-        explainer = self._explainers[cluster_id]
-        model = self._models[cluster_id]
+        explainer = self._explainers[key]
+        model = self._models[key]
 
         active_set_explanations = {}
 
@@ -547,6 +562,7 @@ class ClusterDecisionTracer:
         cluster_id: Optional[int] = None,
         window_scores_source_cluster_id: Optional[int] = None,
         score_source_policy: str = 'recompute',
+        variant: Optional[str] = None,
     ) -> DecisionTrace:
         # End-to-end: routing → candidate_preservation → selection → fusion
         _VALID_POLICIES = ('strict', 'recompute', 'trust_input')
@@ -599,14 +615,15 @@ class ClusterDecisionTracer:
         cluster_id = used_cluster_id
 
         if score_source_policy == 'recompute':
-            if cluster_id in self._models:
+            rkey = self._model_key(cluster_id, variant)
+            if rkey in self._models:
                 feature_cols = [f'val_{i}' for i in range(N_FEATURES)]
                 meta_mat = pd.DataFrame(catch22_windows, columns=feature_cols)
                 meta_mat = meta_mat.replace([np.nan, np.inf, -np.inf], 0)
-                window_scores_matrix = self._models[cluster_id].predict(meta_mat)
+                window_scores_matrix = self._models[rkey].predict(meta_mat)
             else:
                 logger.warning(
-                    f"recompute policy but cluster {cluster_id} model missing. "
+                    f"recompute policy but {rkey} model missing. "
                     f"Falling back to supplied window_scores_matrix."
                 )
 
@@ -633,7 +650,7 @@ class ClusterDecisionTracer:
                 rep_map[det_idx] = ds.representative_windows[0]
 
         active_explanations, pairwise = self.explain_selection(
-            catch22_windows, cluster_id, active_indices, rep_map,
+            catch22_windows, cluster_id, active_indices, rep_map, variant=variant,
         )
 
         selection = SelectionCard(

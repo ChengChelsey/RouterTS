@@ -78,9 +78,7 @@ python scripts/run_online.py ... --output_dir out/predict --domain OOD
 
 Results land in `out/predict/ID.csv` / `OOD.csv`.
 
-### Detector fusion: `--B`
-
-By default (`--B 1`) each series uses its single routed detector's raw score.
+**Detector fusion (`--B`).** By default (`--B 1`) each series uses its single routed detector's raw score.
 With `--B b > 1`, RouterTS fuses the top-*b* detectors (ranked by gap-weighted vote probability) via **weighted reciprocal-rank fusion (wRRF)**:
 
 ```bash
