@@ -1,36 +1,17 @@
 # RouterTS
 
-## Get Started
-
-**Step 1:** Clone this repository and change into its root directory.
-
-**Step 2:** Install the dependencies:
+## Setup
 
 ```bash
 pip install -r requirements.txt
-```
-
-**Step 3:** Install the package:
-
-```bash
 pip install -e .
 ```
 
+## Reproduce
 
-## Reproduce the paper results
+**1. Dataset.** Download [TSB-AD-U](https://thedatumorg.github.io/TSB-AD/) and place one CSV per series (label in the last column) at `datasets/TSB-AD-U/<stem>.csv`.
 
-The window-level meta-feature table for the 619-series training split is provided
-(`data/TSB_meta_feature_U_pool20.csv`).
-
-**1. Get the dataset.** Download TSB-AD-U from the
-[TSB-AD benchmark](https://thedatumorg.github.io/TSB-AD/) and place one CSV per
-series (label in the last column):
-
-```
-datasets/TSB-AD-U/<stem>.csv
-```
-
-**2. Generate the detector scores** 
+**2. Detector scores.**
 
 ```bash
 python scripts/generate_scores.py \
@@ -39,9 +20,7 @@ python scripts/generate_scores.py \
     --score_dir scores
 ```
 
-Writes `scores/<Detector>/<stem>.npy` for all 20 detectors over the test split.
-
-**3. Train the per-cluster selectors (offline).** 
+**3. Train per-cluster selectors (offline).**
 
 ```bash
 python scripts/run_offline.py \
@@ -50,17 +29,9 @@ python scripts/run_offline.py \
     --output_dir out/run
 ```
 
-Produces (TAGC selects `k`; on this table it is 13, consolidated to 9):
+This produces `out/run/testbed/classifier/classifier_agg_raw_k13.pkl` and `out/run/weights/agg_raw_k13/SATzilla_Cluster_C{0..8}/<domain>.pkl` (TAGC selects k=13 on this table).
 
-```
-out/run/testbed/classifier/classifier_agg_raw_k13.pkl
-out/run/weights/agg_raw_k13/SATzilla_Cluster_C{0..8}/{domain}.pkl
-```
-
-(`domain` ∈ `ID`, `Environment`, `Facility`, `Finance`, `HumanActivity`,
-`Medical`, `Sensor`, `Synthetic`, `Traffic`, `WebService`.)
-
-**4. Run online inference:**
+**4. Online inference.** Results go to `out/predict/ID.csv` (`OOD.csv` for OOD).
 
 ```bash
 # In-distribution (ID)
@@ -71,30 +42,13 @@ python scripts/run_online.py \
     --score_dir scores \
     --dataset_dir datasets/TSB-AD-U \
     --output_dir out/predict --domain ID
-
-# Leave-one-domain-out (OOD)
-python scripts/run_online.py ... --output_dir out/predict --domain OOD
+# Leave-one-domain-out: --domain OOD
 ```
 
-Results land in `out/predict/ID.csv` / `OOD.csv`.
-
-**Detector fusion (`--B`).** By default (`--B 1`) each series uses its single routed detector's raw score.
-With `--B b > 1`, RouterTS fuses the top-*b* detectors (ranked by gap-weighted vote probability) via **weighted reciprocal-rank fusion (wRRF)**:
-
-```bash
-python scripts/run_online.py ... --domain ID --B 5
-```
+Set `--B b` with `b > 1` to fuse the top-`b` detectors using weighted reciprocal rank fusion. The default `--B 1` uses the score of the single routed detector.
 
 ## More Details
 
-**Configuration.** RouterTS hyperparameters (window size, gap threshold, wRRF
-`k0`, Random Forest settings) live in `routerts/config.py`. Candidate detector
-hyperparameters use TSB-AD's `Optimal_Uni_algo_HP_dict`. Dataset splits are in
-`data/` (`test_split.csv` = 251 test, `train_split.csv` = 619 train,
-`TSB_meta_feature_U_pool20.csv` = window-level training meta-features).
-
-**Testbed.** The benchmark splits, evaluation protocols, candidate detector pool
-and hyperparameters follow the **TSB-AutoAD** framework (Liu et al.). The
-underlying datasets and base anomaly detectors are adopted from the
-[TSB-AD benchmark](https://thedatumorg.github.io/TSB-AD/) (NeurIPS 2024).
-
+- RouterTS hyperparameters live in `routerts/config.py`. Candidate detector hyperparameters use TSB-AD's `Optimal_Uni_algo_HP_dict` (the same set adopted by the TSB-AutoAD framework).
+- Splits (`test_split.csv`, `train_split.csv`) and the window-level training meta-features (`TSB_meta_feature_U_pool20.csv`) are in `data/`.
+- Benchmark splits, evaluation protocols, and the candidate detector pool follow the **TSB-AutoAD** framework (VLDB 2025). Datasets and base detectors are from the [TSB-AD benchmark](https://thedatumorg.github.io/TSB-AD/) (NeurIPS 2024).
